@@ -191,12 +191,11 @@ def main():
     args = parser.parse_args()
 
     comm = MPI.COMM_WORLD
-    rank = comm.Get_rank() # [cite: 72]
+    rank = comm.Get_rank() 
+    size = comm.Get_size()
     
-    # Start the timer for this specific node
     start_time = time.time()
 
-    # Per assignment: Workers look for dataset_path_rank [cite: 72]
     specific_input = f"{args.dataset_path}_{rank}"
     output_file = f"{args.model_output}_{rank}"
 
@@ -204,17 +203,27 @@ def main():
     
     worker = MAIN_WORKER(specific_input, output_file, n_trees=args.n_trees, seed=args.seed)
     
-    # Stage 1: Build Vocabulary
     worker.create_vocabulary()
     
-    # Stage 2: Train Forest
     worker.train_forest()
 
-    # End the timer
     end_time = time.time()
-    duration = end_time - start_time
-    
-    print(f"Node {rank}: Training completed in {duration:.2f} seconds.") # [cite: 114]
+    local_duration = end_time - start_time
+    all_timings = comm.gather(local_duration, root=0)
+    if rank == 0:
+        print("\n" + "="*30)
+        print("EXPERIMENT STATISTICS")
+        print("="*30)
+        print(f"Total Workers: {size}") 
+        print(f"Average Worker Time: {np.mean(all_timings):.2f}s")
+        print(f"Max Time (Total Duration): {np.max(all_timings):.2f}s")
+        print(f"Min Time: {np.min(all_timings):.2f}s")
+        print(f"Standard Deviation: {np.std(all_timings):.2f}s")
+        print("-" * 30)
+        
+        # Use Max Time for your scaling reports [cite: 107, 114]
+        print(f"FINAL REPORT TIME: {np.max(all_timings):.2f}s")
+        print("="*30 + "\n")
 
 if __name__ == "__main__":
     main()
