@@ -128,7 +128,7 @@ class MAIN_WORKER:
         self.seed = seed
 
     def create_vocabulary(self):
-        data =  pd.read_csv(self.dataset_path,header=None,nrows=10000)
+        data =  pd.read_csv(self.dataset_path,header=None)
         data.columns = ["review","rating"]
         data.replace(to_replace=r'[^a-zA-Z\s]', value='', regex=True, inplace=True)
 
