@@ -1,9 +1,13 @@
 import random
 import numpy as np
 import pandas as pd
-from tqdm import tqdm
-from sklearn.feature_extraction.text import CountVectorizer
+import time
+from scipy.sparse import csr_matrix
+from collections import Counter
 
+from mpi4py import MPI
+
+import argparse
 def gini_index(y):
     if len(y) == 0:
         return 0
@@ -44,7 +48,7 @@ class TreeNode:
             self.value = y.mode()[0]
             self.is_root = True
             self.word = None
-            return self.value
+            return int(self.value)
             
             
         Gini = gini_index(y)
@@ -52,10 +56,10 @@ class TreeNode:
             self.value = y.mode()[0]
             self.is_root = True
             self.word = None
-            return self.value
+            return int(self.value)
         
         max_gain = -1
-        for word in tqdm(self.vocab_used, desc=f"Searching best split at node depth {self.depth}",leave=False):
+        for word in self.vocab_used:
             mask = self.get_split_mask(X, word_id=word)
             #X_left, y_left,X_right, y_right = self.split(X,y,word_id=word)
             y_left = y[mask]
@@ -76,10 +80,10 @@ class TreeNode:
                 best_mask = mask
                 #print(f"Depth: {self.depth}, Chosen word: {self.word}, Gain: {max_gain}")
         if max_gain < self.eps:
-            self.value = y.mode()[0]
+            self.value = int(y.mode()[0])
             self.is_root = True
             self.word = None
-            return self.value
+            return int(self.value)
             
         X_left, y_left,X_right, y_right = X[best_mask], y[best_mask],X[~best_mask], y[~best_mask]
         self.left = TreeNode(self.depth+1,self.vocab_length,False)
@@ -87,7 +91,7 @@ class TreeNode:
 
 
         if self.word is None:
-            return self.value
+            return int(self.value)
         else:
             return [self.word,self.left.annotate(X_left, y_left),self.right.annotate(X_right, y_right)]
         
@@ -95,7 +99,13 @@ class TreeNode:
         
 class TREE_CLASSIFIER:
     def __init__(self,list_of_words,max_depth=10,output_file="test.txt",seed=42):
+        
+        np.random.seed(seed)
+        random.seed(seed)
         self.V = list_of_words
+
+        
+
         
         self.root = TreeNode(0,self.V,False)
         self.max_depth = max_depth
@@ -115,12 +125,15 @@ class MAIN_WORKER:
         
         self.model_output = model_output
         self.n_trees = n_trees
+        self.seed = seed
 
     def create_vocabulary(self):
-        data =  pd.read_csv(self.dataset_path,header=None,nrows=1000)
+        data =  pd.read_csv(self.dataset_path,header=None,nrows=10000)
         data.columns = ["review","rating"]
         data.replace(to_replace=r'[^a-zA-Z\s]', value='', regex=True, inplace=True)
+
         data['review'] = data['review'].str.lower()
+        data = data.sample(n=len(data), replace=True, random_state=42)
         self.vectorizer = CountVectorizer(min_df=2)
         self.X = self.vectorizer.fit_transform(data["review"])
         self.y = data["rating"]
@@ -131,10 +144,80 @@ class MAIN_WORKER:
     def train_forest(self):
         list_of_words = len(list(self.vectorizer.get_feature_names_out()))
         for i in range(self.n_trees):
-            tree = TREE_CLASSIFIER(list_of_words,output_file=self.model_output,seed=i)
+            tree = TREE_CLASSIFIER(list_of_words,output_file=self.model_output,seed=self.seed+i)
             tree.annotate(self.X,self.y)
 
-if __name__ == "__main__":
-    worker = MAIN_WORKER("amazon_reviews_2M.csv","model.txt",n_trees=10)
+
+class CountVectorizer:
+    def __init__(self, min_df=2):
+        self.min_df = min_df
+        self.vocabulary_ = {}
+        self.list_of_words=[]
+    def fit_transform(self, documents):
+        
+        doc_count = Counter()
+        for doc in documents:
+            words = set(doc.split())
+            doc_count.update(words)
+        for word in doc_count.most_common():
+            if word[1]>1:
+                self.list_of_words.append(word[0])
+        self.list_of_words= sorted(self.list_of_words)
+        self.vocabulary_ = {word: idx for idx, word in enumerate(sorted(self.list_of_words)) }
+        rows, cols, data = [], [], []
+        for row_idx, doc in enumerate(documents):
+            word_count = Counter(doc.split())
+            for word, _ in word_count.items():
+                if word in self.vocabulary_:
+                    rows.append(row_idx)
+                    cols.append(self.vocabulary_[word])
+                    data.append(1)
+        
+        return csr_matrix((data, (rows, cols)), shape=(len(documents), len(self.vocabulary_)))
+    
+    def get_feature_names_out(self):
+        return self.list_of_words
+
+
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Train a model using MPI.")
+    parser.add_argument("dataset_path", type=str, help="Path to the input dataset")
+    parser.add_argument("model_output", type=str, help="Path to save the model")
+    parser.add_argument("n_trees", type=int, help="Number of trees (T)")
+    parser.add_argument("seed", type=int, help="Random seed for reproducibility")
+
+    args = parser.parse_args()
+
+    comm = MPI.COMM_WORLD
+    rank = comm.Get_rank() # [cite: 72]
+    
+    # Start the timer for this specific node
+    start_time = time.time()
+
+    # Per assignment: Workers look for dataset_path_rank [cite: 72]
+    specific_input = f"{args.dataset_path}_{rank}"
+    output_file = f"{args.model_output}_{rank}"
+
+    print(f"Node {rank}: Loading data from {specific_input}")
+    
+    worker = MAIN_WORKER(specific_input, output_file, n_trees=args.n_trees, seed=args.seed)
+    
+    # Stage 1: Build Vocabulary
     worker.create_vocabulary()
+    
+    # Stage 2: Train Forest
     worker.train_forest()
+
+    # End the timer
+    end_time = time.time()
+    duration = end_time - start_time
+    
+    print(f"Node {rank}: Training completed in {duration:.2f} seconds.") # [cite: 114]
+
+if __name__ == "__main__":
+    main()
+
+
+
