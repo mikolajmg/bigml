@@ -49,7 +49,7 @@ class TreeNode:
             self.value = y.mode()[0]
             self.is_root = True
             self.word = None
-            return self.value
+            return int(self.value)
             
             
         Gini = gini_index(y)
@@ -57,7 +57,7 @@ class TreeNode:
             self.value = y.mode()[0]
             self.is_root = True
             self.word = None
-            return self.value
+            return int(self.value)
         
         max_gain = -1
         for word in self.vocab_used:
@@ -81,10 +81,10 @@ class TreeNode:
                 best_mask = mask
                 #print(f"Depth: {self.depth}, Chosen word: {self.word}, Gain: {max_gain}")
         if max_gain < self.eps:
-            self.value = y.mode()[0]
+            self.value = int(y.mode()[0])
             self.is_root = True
             self.word = None
-            return self.value
+            return int(self.value)
             
         X_left, y_left,X_right, y_right = X[best_mask], y[best_mask],X[~best_mask], y[~best_mask]
         self.left = TreeNode(self.depth+1,self.vocab_length,False)
@@ -92,7 +92,7 @@ class TreeNode:
 
 
         if self.word is None:
-            return self.value
+            return int(self.value)
         else:
             return [self.word,self.left.annotate(X_left, y_left),self.right.annotate(X_right, y_right)]
         
@@ -102,6 +102,7 @@ class TREE_CLASSIFIER:
     def __init__(self,list_of_words,max_depth=10,output_file="test.txt",seed=42):
         
         np.random.seed(seed)
+        random.seed(seed)
         self.V = list_of_words
 
         
@@ -128,10 +129,12 @@ class MAIN_WORKER:
         self.seed = seed
 
     def create_vocabulary(self):
-        data =  pd.read_csv(self.dataset_path,header=None,nrows=1000)
+        data =  pd.read_csv(self.dataset_path,header=None,nrows=10000)
         data.columns = ["review","rating"]
         data.replace(to_replace=r'[^a-zA-Z\s]', value='', regex=True, inplace=True)
+
         data['review'] = data['review'].str.lower()
+        data = data.sample(n=len(data), replace=True, random_state=self.seed )
         self.vectorizer = CountVectorizer(min_df=2)
         self.X = self.vectorizer.fit_transform(data["review"])
         self.y = data["rating"]
@@ -183,10 +186,10 @@ def main():
     parser = argparse.ArgumentParser(description="Train a model using MPI.")
     
     
-    parser.add_argument("dataset_path", type=str, help="Path to the input dataset", default="amazon_reviews_2M.csv",required=False)
-    parser.add_argument("model_output", type=str, help="Path to save the model", default="model.txt",required=False)
-    parser.add_argument("n_trees", type=int, help="Number of trees (T)", default=10,required=False)
-    parser.add_argument("seed", type=int, help="Random seed for reproducibility", default=42,required=False)
+    parser.add_argument("dataset_path", type=str, help="Path to the input dataset", default="amazon_reviews_2M.csv")
+    parser.add_argument("model_output", type=str, help="Path to save the model", default="model.txt")
+    parser.add_argument("n_trees", type=int, help="Number of trees (T)", default=10)
+    parser.add_argument("seed", type=int, help="Random seed for reproducibility", default=42)
 
     args = parser.parse_args()
 
@@ -194,7 +197,7 @@ def main():
 
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
-
+    rank = 0
     
     # Now you can use them:
     print(f"Loading data from: {args.dataset_path}")
